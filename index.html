@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AI Chấm Bài Đa Năng</title>
+    <!-- Thư viện TensorFlow và Teachable Machine -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+    <style>
+        :root {
+            --primary: #4F46E5;
+            --success: #10B981;
+            --danger: #EF4444;
+            --bg: #F3F4F6;
+            --text: #1F2937;
+            --white: #FFFFFF;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { background-color: var(--bg); color: var(--text); padding-bottom: 70px; }
+        
+        /* Header */
+        .header { background-color: var(--primary); color: var(--white); text-align: center; padding: 15px; font-size: 1.2rem; font-weight: bold; position: sticky; top: 0; z-index: 10; }
+        
+        /* Tabs */
+        .tab-content { display: none; padding: 15px; }
+        .tab-content.active { display: block; }
+        
+        /* Form & Inputs */
+        .form-section { background: var(--white); padding: 15px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 15px; border: 1px solid #E5E7EB; }
+        .form-section h3 { margin-bottom: 15px; color: var(--primary); font-size: 1.1rem; border-bottom: 1px solid #E5E7EB; padding-bottom: 5px; }
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: bold; font-size: 0.9rem; }
+        .form-group input, .form-group select { width: 100%; padding: 10px; border: 1px solid #D1D5DB; border-radius: 5px; font-size: 0.95rem; background: var(--white); }
+        .form-group small { color: #6B7280; font-size: 0.8rem; display: block; margin-top: 3px; }
+        
+        .btn { width: 100%; background-color: var(--primary); color: var(--white); padding: 12px; border: none; border-radius: 5px; font-size: 1rem; font-weight: bold; cursor: pointer; text-align: center; margin-bottom: 10px; }
+        .btn.btn-save { background-color: var(--success); }
+        .btn:disabled { background-color: #9CA3AF; cursor: not-allowed; }
+        
+        /* Camera Area */
+        #webcam-container { width: 100%; aspect-ratio: 3/4; background: #000; border-radius: 10px; overflow: hidden; position: relative; margin-bottom: 15px; display: flex; align-items: center; justify-content: center; }
+        #webcam-container video { width: 100%; height: 100%; object-fit: cover; }
+        
+        /* Result Area */
+        #result-container { background: var(--white); padding: 15px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); min-height: 80px; }
+        .rubric-item { border-bottom: 1px solid #E5E7EB; padding-bottom: 10px; margin-bottom: 10px; }
+        .rubric-item:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+        .status-correct { color: var(--success); font-weight: bold; }
+        .status-wrong { color: var(--danger); font-weight: bold; }
+        .comment-box { background: #F9FAFB; padding: 10px; border-radius: 5px; font-size: 0.9rem; margin-top: 5px; border-left: 3px solid var(--primary); }
+        
+        /* Bottom Navigation */
+        .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: var(--white); display: flex; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); z-index: 100; }
+        .nav-item { flex: 1; text-align: center; padding: 15px 0; font-weight: bold; color: #6B7280; cursor: pointer; border-top: 3px solid transparent; }
+        .nav-item.active { color: var(--primary); border-top-color: var(--primary); }
+    </style>
+</head>
+<body>
+
+    <div class="header">Hệ Thống Chấm Bài AI</div>
+
+    <!-- TAB CHẤM BÀI -->
+    <div id="tab-scan" class="tab-content active">
+        <div class="form-section">
+            <div class="form-group" style="margin-bottom: 0;">
+                <label>Chế độ Đánh giá:</label>
+                <select id="eval-mode" onchange="toggleEvalMode()">
+                    <option value="regular">📌 Chấm từng câu (Toán, Lý, Trắc nghiệm... - Chọn 1 câu)</option>
+                    <option value="drawing">📋 Chấm Bản vẽ kỹ thuật (Tự động xét cả 3 tiêu chí)</option>
+                </select>
+            </div>
+            
+            <div class="form-group" id="regular-model-selector" style="margin-top: 15px;">
+                <label>Chọn Câu hỏi / Tiêu chí để chấm:</label>
+                <select id="model-select">
+                    <option value="">-- Cần lưu Cài đặt Model trước --</option>
+                </select>
+            </div>
+        </div>
+        
+        <div id="webcam-container">
+            <video id="webcam-video" autoplay playsinline></video>
+        </div>
+        
+        <button id="btn-scan" class="btn" onclick="predict()">Chụp & Đánh Giá</button>
+        
+        <div id="result-container">
+            <i style="color: #6B7280;">Kết quả đánh giá, lỗi sai và nhận xét sẽ hiển thị ở đây...</i>
+        </div>
+    </div>
+
+    <!-- TAB CÀI ĐẶT -->
+    <div id="tab-settings" class="tab-content">
+        <div style="background:#FEF3C7; color:#92400E; padding:10px; border-radius:5px; margin-bottom:15px; font-size:0.9rem;">
+            <b>Lưu ý:</b> Vì lý do bảo mật, file Model không lưu lại khi tải lại trang. Tuy nhiên <b>Nội dung chữ</b> được lưu tự động. Hãy chọn lại 3 file (model, weights, metadata) khi mở lại web.
+        </div>
+
+        <!-- Slot 1 -->
+        <div class="form-section" id="config-1">
+            <h3>Slot 1 (Câu hỏi 1 / Tiêu chí 1)</h3>
+            <div class="form-group">
+                <label>Tên Bài / Câu hỏi / Tiêu chí:</label>
+                <input type="text" id="m1-name" placeholder="VD: Câu 1 Toán HOẶC Tiêu chí 1 Hình chiếu">
+            </div>
+            <div class="form-group">
+                <label>Tải lên 3 file Teachable Machine (.json, .bin):</label>
+                <input type="file" id="m1-files" multiple accept=".json,.bin" style="border: none; padding: 5px 0;">
+            </div>
+            <div class="form-group" style="display: flex; gap: 10px;">
+                <div style="flex: 2;">
+                    <label>Tên Nhãn ĐÚNG (Class đúng):</label>
+                    <input type="text" id="m1-correct" placeholder="VD: x=5 HOẶC Dung_TC1">
+                </div>
+                <div style="flex: 1;">
+                    <label>Điểm:</label>
+                    <input type="number" id="m1-score" placeholder="VD: 2.0">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Nhận xét / Lời phê khi ĐÚNG:</label>
+                <input type="text" id="m1-rubric-good" placeholder="VD: Làm đúng, chính xác.">
+            </div>
+            <div class="form-group">
+                <label>Nhận xét / Lời phê khi SAI:</label>
+                <input type="text" id="m1-rubric-bad" placeholder="VD: Sai dấu HOẶC Thiếu nét.">
+            </div>
+        </div>
+
+        <!-- Slot 2 -->
+        <div class="form-section" id="config-2">
+            <h3>Slot 2 (Câu hỏi 2 / Tiêu chí 2)</h3>
+            <div class="form-group">
+                <label>Tên Bài / Câu hỏi / Tiêu chí:</label>
+                <input type="text" id="m2-name" placeholder="VD: Câu 2 Toán HOẶC Tiêu chí 2 Kích thước">
+            </div>
+            <div class="form-group">
+                <label>Tải lên 3 file Teachable Machine (.json, .bin):</label>
+                <input type="file" id="m2-files" multiple accept=".json,.bin" style="border: none; padding: 5px 0;">
+            </div>
+            <div class="form-group" style="display: flex; gap: 10px;">
+                <div style="flex: 2;">
+                    <label>Tên Nhãn ĐÚNG (Class đúng):</label>
+                    <input type="text" id="m2-correct" placeholder="VD: Khoanh_C HOẶC Dung_TC2">
+                </div>
+                <div style="flex: 1;">
+                    <label>Điểm:</label>
+                    <input type="number" id="m2-score" placeholder="VD: 2.0">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Nhận xét / Lời phê khi ĐÚNG:</label>
+                <input type="text" id="m2-rubric-good" placeholder="VD: Chọn đúng đáp án.">
+            </div>
+            <div class="form-group">
+                <label>Nhận xét / Lời phê khi SAI:</label>
+                <input type="text" id="m2-rubric-bad" placeholder="VD: Nhầm công thức.">
+            </div>
+        </div>
+
+        <!-- Slot 3 -->
+        <div class="form-section" id="config-3">
+            <h3>Slot 3 (Câu hỏi 3 / Tiêu chí 3)</h3>
+            <div class="form-group">
+                <label>Tên Bài / Câu hỏi / Tiêu chí:</label>
+                <input type="text" id="m3-name" placeholder="VD: Câu 3 Lý HOẶC Tiêu chí 3 Nét vẽ">
+            </div>
+            <div class="form-group">
+                <label>Tải lên 3 file Teachable Machine (.json, .bin):</label>
+                <input type="file" id="m3-files" multiple accept=".json,.bin" style="border: none; padding: 5px 0;">
+            </div>
+            <div class="form-group" style="display: flex; gap: 10px;">
+                <div style="flex: 2;">
+                    <label>Tên Nhãn ĐÚNG (Class đúng):</label>
+                    <input type="text" id="m3-correct" placeholder="VD: Dung_TC3">
+                </div>
+                <div style="flex: 1;">
+                    <label>Điểm:</label>
+                    <input type="number" id="m3-score" placeholder="VD: 3.0">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Nhận xét / Lời phê khi ĐÚNG:</label>
+                <input type="text" id="m3-rubric-good" placeholder="VD: Chính xác.">
+            </div>
+            <div class="form-group">
+                <label>Nhận xét / Lời phê khi SAI:</label>
+                <input type="text" id="m3-rubric-bad" placeholder="VD: Phân tích sai hiện tượng.">
+            </div>
+        </div>
+
+        <button class="btn btn-save" onclick="saveSettings()" id="btn-save-settings">💾 Tải Model & Lưu Cấu Hình</button>
+    </div>
+
+    <!-- BOTTOM NAV -->
+    <div class="bottom-nav">
+        <div class="nav-item active" onclick="switchTab('scan', this)">📷 Chấm Bài</div>
+        <div class="nav-item" onclick="switchTab('settings', this)">⚙️ Cài Đặt</div>
+    </div>
+
+    <script>
+        let loadedModels = [null, null, null];
+        const videoElement = document.getElementById('webcam-video');
+        const btnScan = document.getElementById('btn-scan');
+        const btnSave = document.getElementById('btn-save-settings');
+
+        // Hàm TỐI QUAN TRỌNG: Chuẩn hóa tiếng Việt, loại bỏ hoàn toàn dấu câu và dấu cách thừa
+        function normalizeString(str) {
+            if (!str) return "";
+            return str.normalize('NFD') // Tách dấu ra khỏi chữ
+                      .replace(/[\u0300-\u036f]/g, '') // Xóa dấu
+                      .replace(/đ/g, 'd').replace(/Đ/g, 'D') // Đổi Đ thành D
+                      .toLowerCase() // Đưa về chữ thường
+                      .replace(/\s+/g, ' ') // Gộp khoảng trắng thừa
+                      .trim(); // Xóa khoảng trắng 2 đầu
+        }
+
+        // Hàm kiểm tra 2 nhãn có giống nhau không
+        function isMatch(classFromAI, classFromInput) {
+            return normalizeString(classFromAI) === normalizeString(classFromInput);
+        }
+
+        function switchTab(tabId, el) {
+            document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
+            document.querySelectorAll('.nav-item').forEach(nav => nav.classList.remove('active'));
+            
+            document.getElementById('tab-' + tabId).classList.add('active');
+            el.classList.add('active');
+        }
+
+        function toggleEvalMode() {
+            const mode = document.getElementById('eval-mode').value;
+            document.getElementById('regular-model-selector').style.display = (mode === 'regular') ? 'block' : 'none';
+        }
+
+        function extractTMFiles(inputId) {
+            const input = document.getElementById(inputId);
+            if (!input.files || input.files.length < 3) return null;
+            
+            let modelFile, weightsFile, metaFile;
+            for (let i = 0; i < input.files.length; i++) {
+                const f = input.files[i];
+                if (f.name.endsWith('.json')) {
+                    if (f.name.includes('metadata')) metaFile = f;
+                    else modelFile = f;
+                } else if (f.name.endsWith('.bin')) {
+                    weightsFile = f;
+                }
+            }
+            if (modelFile && weightsFile && metaFile) return { modelFile, weightsFile, metaFile };
+            return null;
+        }
+
+        async function saveSettings() {
+            btnSave.textContent = "⏳ Đang tải xử lý Model...";
+            btnSave.disabled = true;
+            const configTextData = [];
+
+            for (let i = 1; i <= 3; i++) {
+                const confData = {
+                    name: document.getElementById(`m${i}-name`).value,
+                    correct: document.getElementById(`m${i}-correct`).value,
+                    score: parseFloat(document.getElementById(`m${i}-score`).value) || 0,
+                    rubricGood: document.getElementById(`m${i}-rubric-good`).value,
+                    rubricBad: document.getElementById(`m${i}-rubric-bad`).value
+                };
+                configTextData.push(confData);
+
+                const files = extractTMFiles(`m${i}-files`);
+                if (files) {
+                    try {
+                        const model = await tmImage.loadFromFiles(files.modelFile, files.weightsFile, files.metaFile);
+                        loadedModels[i-1] = { model: model, config: confData };
+                    } catch (error) {
+                        alert(`Lỗi khi load Model ở Slot ${i}. Xin kiểm tra lại 3 file!`);
+                    }
+                } else if (loadedModels[i-1]) {
+                    loadedModels[i-1].config = confData;
+                }
+            }
+
+            localStorage.setItem('ai_grading_text_configs', JSON.stringify(configTextData));
+            updateRegularModelSelect();
+            btnSave.textContent = "💾 Tải Model & Lưu Cấu Hình";
+            btnSave.disabled = false;
+            alert("Đã lưu cấu hình Text và Nạp Model thành công. Bạn có thể sang tab Chấm Bài!");
+        }
+
+        function loadTextSettings() {
+            const saved = localStorage.getItem('ai_grading_text_configs');
+            if (saved) {
+                const confs = JSON.parse(saved);
+                for (let i = 0; i < confs.length; i++) {
+                    const c = confs[i];
+                    document.getElementById(`m${i+1}-name`).value = c.name || '';
+                    document.getElementById(`m${i+1}-correct`).value = c.correct || '';
+                    document.getElementById(`m${i+1}-score`).value = c.score || '';
+                    document.getElementById(`m${i+1}-rubric-good`).value = c.rubricGood || '';
+                    document.getElementById(`m${i+1}-rubric-bad`).value = c.rubricBad || '';
+                }
+            }
+        }
+
+        function updateRegularModelSelect() {
+            const select = document.getElementById('model-select');
+            select.innerHTML = '<option value="">-- Chọn bài kiểm tra --</option>';
+            loadedModels.forEach((m, idx) => {
+                if (m) {
+                    let opt = document.createElement('option');
+                    opt.value = idx;
+                    opt.textContent = m.config.name || `Model ${idx + 1}`;
+                    select.appendChild(opt);
+                }
+            });
+        }
+
+        async function setupCamera() {
+            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({
+                        video: { facingMode: 'environment' }
+                    });
+                    videoElement.srcObject = stream;
+                } catch (error) {
+                    document.getElementById('result-container').innerHTML = 
+                        "<p style='color:red;'>Không thể mở Camera. Hãy cấp quyền truy cập webcam.</p>";
+                }
+            }
+        }
+
+        async function predict() {
+            const mode = document.getElementById('eval-mode').value;
+            const resultBox = document.getElementById('result-container');
+            
+            if (mode === 'regular') {
+                const idx = document.getElementById('model-select').value;
+                if (idx === "" || !loadedModels[idx]) {
+                    alert("Chưa chọn bài, hoặc Model chưa được tải ở Cài đặt!");
+                    return;
+                }
+            } else {
+                const loadedCount = loadedModels.filter(m => m !== null).length;
+                if (loadedCount === 0) {
+                    alert("Chưa tải Model nào ở mục Cài đặt!");
+                    return;
+                }
+            }
+
+            btnScan.textContent = "Đang quét & Phân tích AI...";
+            btnScan.disabled = true;
+
+            const canvas = document.createElement('canvas');
+            canvas.width = videoElement.videoWidth;
+            canvas.height = videoElement.videoHeight;
+            canvas.getContext('2d').drawImage(videoElement, 0, 0);
+
+            let html = '';
+            let totalScore = 0;
+            let totalMaxScore = 0;
+
+            if (mode === 'regular') {
+                // CHẤM CÂU HỎI ĐỘC LẬP
+                const idx = document.getElementById('model-select').value;
+                const mData = loadedModels[idx];
+                
+                const prediction = await mData.model.predict(canvas);
+                prediction.sort((a, b) => b.probability - a.probability);
+                const topClass = prediction[0].className;
+                const conf = (prediction[0].probability * 100).toFixed(1);
+
+                html += `<h3>Kết quả: ${mData.config.name}</h3>`;
+                
+                // KIỂM TRA ĐÚNG SAI SỬ DỤNG HÀM isMatch ĐÃ KHỬ DẤU TIẾNG VIỆT
+                if (isMatch(topClass, mData.config.correct)) {
+                    html += `<div class="rubric-item" style="margin-top: 10px;">
+                        <div style="display:flex; justify-content:space-between;">
+                            <span class="status-correct">✔ ĐÚNG CHÍNH XÁC (${conf}%)</span>
+                            <span style="font-weight:bold;">Điểm: ${mData.config.score}/${mData.config.score}</span>
+                        </div>
+                        <div class="comment-box"><strong>Nhận xét:</strong> ${mData.config.rubricGood}</div>
+                    </div>`;
+                } else {
+                    html += `<div class="rubric-item" style="margin-top: 10px;">
+                        <div style="display:flex; justify-content:space-between;">
+                            <span class="status-wrong">✖ SAI - Đã chọn/điền: ${topClass} (${conf}%)</span>
+                            <span style="font-weight:bold;">Điểm: 0/${mData.config.score}</span>
+                        </div>
+                        <div class="comment-box"><strong>Lỗi / Nhận xét:</strong> ${mData.config.rubricBad}</div>
+                    </div>`;
+                }
+            } 
+            else if (mode === 'drawing') {
+                // CHẤM 3 TIÊU CHÍ BẢN VẼ KỸ THUẬT
+                html += `<h3 style="margin-bottom:10px; border-bottom: 2px solid var(--primary); padding-bottom:5px;">Rubric Đánh Giá Bản Vẽ</h3>`;
+                
+                for(let i = 0; i < 3; i++) {
+                    const mData = loadedModels[i];
+                    if (!mData) {
+                        html += `<div class="rubric-item" style="color:gray;"><em>Tiêu chí ${i+1} chưa được nạp Model.</em></div>`;
+                        continue;
+                    }
+
+                    const prediction = await mData.model.predict(canvas);
+                    prediction.sort((a, b) => b.probability - a.probability);
+                    const topClass = prediction[0].className;
+                    const conf = (prediction[0].probability * 100).toFixed(0);
+
+                    totalMaxScore += mData.config.score;
+                    
+                    html += `<div class="rubric-item">
+                        <strong>Tiêu chí ${i+1}: ${mData.config.name}</strong><br>`;
+
+                    // SỬ DỤNG HÀM isMatch ĐỂ ĐẢM BẢO CHÍNH XÁC KHI SO SÁNH
+                    if (isMatch(topClass, mData.config.correct)) {
+                        totalScore += mData.config.score;
+                        html += `
+                        <div style="margin-top: 5px; display:flex; justify-content:space-between;">
+                            <span class="status-correct">✔ Đạt (${conf}%)</span>
+                            <span>+${mData.config.score} đ</span>
+                        </div>
+                        <div class="comment-box">${mData.config.rubricGood}</div>`;
+                    } else {
+                        html += `
+                        <div style="margin-top: 5px; display:flex; justify-content:space-between;">
+                            <span class="status-wrong">✖ Phát hiện lỗi: ${topClass} (${conf}%)</span>
+                            <span>0 đ</span>
+                        </div>
+                        <div class="comment-box">${mData.config.rubricBad}</div>`;
+                    }
+                    html += `</div>`;
+                }
+                
+                let finalStatus = (totalScore === totalMaxScore) ? "status-correct" : (totalScore > 0 ? "text-warning" : "status-wrong");
+                html += `<div style="margin-top: 15px; font-size: 1.2rem; font-weight: bold; text-align: center; padding: 10px; background: var(--primary); color: white; border-radius: 5px;">
+                    Tổng điểm: ${totalScore} / ${totalMaxScore}
+                </div>`;
+            }
+
+            resultBox.innerHTML = html;
+            btnScan.textContent = "Chụp & Đánh Giá Tiếp";
+            btnScan.disabled = false;
+        }
+
+        window.onload = function() {
+            loadTextSettings();
+            setupCamera();
+            toggleEvalMode();
+        }
+    </script>
+</body>
+</html>
